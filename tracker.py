@@ -1,14 +1,13 @@
 import os
-import time
-from dotenv import load_dotenv
 import requests
 from playwright.sync_api import sync_playwright
 
-# Load credentials from hidden .env profile
-load_dotenv()
+# NOTE: load_dotenv() and time are removed because GitHub Actions handles 
+# environment variables natively and schedules execution intervals externally.
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# Fetch credentials securely from GitHub Repository Secrets
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # The customer-facing search page URL
 TARGET_URL = "https://blinkit.com/s/?q=hot%20wheels"
@@ -37,10 +36,6 @@ TARGET_MODELS = [
     "convertible", "coupe", "sedan", "wagon", "pickup", "gasser", " Concept "
 ]
 
-
-# Stateful persistent storage tracking what items have already been notified
-previously_notified = set()
-
 def dispatch_alert(item_name):
     """Pushes clean markdown notification payloads directly to your Telegram channel."""
     text_payload = (
@@ -66,9 +61,7 @@ def dispatch_alert(item_name):
         print(f"[NETWORK ERROR] Failed reaching Telegram: {error}")
 
 def execute_browser_monitor(browser_context):
-    """Uses a persistent browser context window to run clean inventory parsing sweeps."""
-    global previously_notified
-    
+    """Uses a temporary browser context window to run a clean inventory parsing sweep."""
     page = browser_context.new_page()
     
     try:
@@ -83,7 +76,7 @@ def execute_browser_monitor(browser_context):
         if not product_elements:
             product_elements = page.locator("div:has-text('Hot Wheels')").all()
             
-        # Tracks unique items seen purely within THIS specific loop execution pass
+        # Tracks unique items seen purely within this automated run execution pass
         current_sweep_items = set()
         
         for element in product_elements:
@@ -107,21 +100,16 @@ def execute_browser_monitor(browser_context):
                     is_wanted = True  # If list is empty, tracking default targets everything
                     
                 if is_wanted:
-                    # Deduplication Layer A: If we already parsed this item name during *this* sweep loop, skip it
+                    # Deduplication Layer: Skip duplicates found on the page layout setup
                     if item_name in current_sweep_items:
                         continue
                         
                     current_sweep_items.add(item_name)
                     
-                    # Deduplication Layer B: Check across time memory states
-                    if item_name not in previously_notified:
-                        dispatch_alert(item_name)
-                        previously_notified.add(item_name)
+                    # Send alert immediately. Since the GitHub script runs as a fresh cron container 
+                    # every 10 minutes, any matching item on the page gets an alert pushed.
+                    dispatch_alert(item_name)
                         
-        # Retain state only for active items that remain live on the interface catalog
-        # If an item disappears from current_sweep_items, it clears out of state memory,
-        # allowing it to trigger a fresh alert if it gets restocked down the line.
-        previously_notified = previously_notified.intersection(current_sweep_items)
         print(f"[MONITOR] Check complete. Active models available: {len(current_sweep_items)}")
         
     except Exception as error:
@@ -131,7 +119,7 @@ def execute_browser_monitor(browser_context):
         page.close()
 
 if __name__ == "__main__":
-    print("====== System Online: Persistent Targeted Monitor Engaged ======")
+    print("====== System Online: GitHub Workflow Triggered ======")
     
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -139,6 +127,6 @@ if __name__ == "__main__":
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
         
-        while True:
-            execute_browser_monitor(context)
-            time.sleep(60)
+        # Execute exactly one monitoring check pass per runner initialization
+        execute_browser_monitor(context)
+        browser.close()
